@@ -1,4 +1,5 @@
 #include "sd_format.h"
+#include "crlf_out.h"
 #include "config.h"
 
 #include "esp_heap_caps.h"
@@ -91,14 +92,14 @@ static void setLe32(uint8_t *p, uint32_t v) {
 static bool hasForeignContent(uint8_t *buf) {
   if (sdmmc_read_sectors(&s_card, buf, 0, 1) != ESP_OK) return true;  // be safe
   if (!memcmp(buf + 3, "EXFAT   ", 8) || !memcmp(buf + 3, "NTFS    ", 8)) {
-    Serial.printf("SD: card holds an %.5s filesystem\n", buf + 3);
+    Term.printf("SD: card holds an %.5s filesystem\n", buf + 3);
     return true;
   }
   if (buf[510] == 0x55 && buf[511] == 0xAA) {
     for (int i = 0; i < 4; i++) {
       const uint8_t *e = buf + 446 + 16 * i;
       if (e[4] != 0 && le32(e + 12) != 0) {
-        Serial.printf("SD: card has a partition table (partition %d type 0x%02X%s)\n", i + 1, e[4], e[4] == 0xEE ? " = GPT" : "");
+        Term.printf("SD: card has a partition table (partition %d type 0x%02X%s)\n", i + 1, e[4], e[4] == 0xEE ? " = GPT" : "");
         return true;
       }
     }
@@ -112,7 +113,7 @@ static bool hasForeignContent(uint8_t *buf) {
 static bool partitionAndFormat(uint8_t *work, uint8_t pdrv) {
   const uint32_t total = s_card.csd.capacity;  // 512-byte sectors
   if (s_card.csd.sector_size != 512 || total < 8192) {
-    Serial.println("SD: unsupported card geometry");
+    Term.println("SD: unsupported card geometry");
     return false;
   }
 
@@ -132,7 +133,7 @@ static bool partitionAndFormat(uint8_t *work, uint8_t pdrv) {
       type = 0x06;  // FAT16
     }
   }
-  Serial.printf("SD: creating primary partition %lu MB at sector %lu, %s, %lu B clusters\n",
+  Term.printf("SD: creating primary partition %lu MB at sector %lu, %s, %lu B clusters\n",
                 (unsigned long)((uint64_t)count * 512 / (1024 * 1024)), (unsigned long)start, fmt == FM_FAT32 ? "FAT32" : "FAT16",
                 (unsigned long)au);
 
@@ -185,10 +186,10 @@ static bool partitionAndFormat(uint8_t *work, uint8_t pdrv) {
   }
   VolToPart[pdrv] = saved;
   if (fr != FR_OK) {
-    Serial.printf("SD: f_mkfs failed (%d)\n", fr);
+    Term.printf("SD: f_mkfs failed (%d)\n", fr);
     return false;
   }
-  Serial.printf("SD: format done in %lu ms\n", (unsigned long)(millis() - t0));
+  Term.printf("SD: format done in %lu ms\n", (unsigned long)(millis() - t0));
   return true;
 }
 
@@ -218,7 +219,7 @@ Result run(bool force) {
         else
           doFormat = true;
       } else {
-        Serial.printf("SD: card read error (%d), not formatting\n", fr);
+        Term.printf("SD: card read error (%d), not formatting\n", fr);
       }
       free(fs);
     }

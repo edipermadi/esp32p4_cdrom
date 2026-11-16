@@ -38,6 +38,7 @@
 #include "cdrom_usb.h"
 #include "sd_disk.h"
 #include "sd_format.h"
+#include "crlf_out.h"
 
 static std::vector<String> g_isos;  // file names inside ISO_DIR
 static int g_current = -1;          // index into g_isos of the selected image
@@ -63,7 +64,7 @@ static bool mountSdOnce() {
   SD_MMC.setPowerChannel(SD_LDO_CHANNEL);
 #endif
   if (!SD_MMC.begin("/sdcard", SD_1BIT_MODE, false, SD_FREQ_KHZ, 2)) {
-    Serial.println("SD: high-speed mount failed, retrying at 20 MHz");
+    Term.println("SD: high-speed mount failed, retrying at 20 MHz");
     SD_MMC.end();
     if (!SD_MMC.begin("/sdcard", SD_1BIT_MODE, false, SDMMC_FREQ_DEFAULT, 2)) {
       SD_MMC.end();
@@ -82,7 +83,7 @@ static bool mountSdOnce() {
       break;
     }
   }
-  Serial.printf("SD: %llu MB card, FatFS drive %s\n", SD_MMC.cardSize() / (1024 * 1024), g_drive);
+  Term.printf("SD: %llu MB card, FatFS drive %s\n", SD_MMC.cardSize() / (1024 * 1024), g_drive);
   g_sdMounted = true;
   return true;
 }
@@ -92,9 +93,9 @@ static bool mountSdOnce() {
 static bool mountSd() {
   if (mountSdOnce()) return true;
 #if AUTO_FORMAT
-  Serial.println("SD: mount failed, checking card ...");
+  Term.println("SD: mount failed, checking card ...");
   SdFormat::Result r = SdFormat::run(false);
-  Serial.printf("SD: %s\n", SdFormat::describe(r));
+  Term.printf("SD: %s\n", SdFormat::describe(r));
   if (r == SdFormat::FORMATTED || r == SdFormat::HAS_FAT) return mountSdOnce();
 #endif
   return false;
@@ -117,7 +118,7 @@ static void scanIsos() {
   FF_DIR dir;
   FILINFO fi;
   if (f_opendir(&dir, dirPath.c_str()) != FR_OK) {
-    Serial.printf("Cannot open folder %s\n", ISO_DIR);
+    Term.printf("Cannot open folder %s\n", ISO_DIR);
     return;
   }
   while (f_readdir(&dir, &fi) == FR_OK && fi.fname[0]) {
@@ -142,22 +143,22 @@ static void ejectDisc() {
 static bool insertDisc(int index) {
   if (index < 0 || index >= (int)g_isos.size()) return false;
   bool hadDisc = CdromUsb::mediaPresent();
-  if (hadDisc && CdromUsb::locked()) Serial.println("Note: host had locked the tray, forcing disc change");
+  if (hadDisc && CdromUsb::locked()) Term.println("Note: host had locked the tray, forcing disc change");
   ejectDisc();
   // Leave the tray empty briefly so the host notices the change.
   if (hadDisc) delay(1500);
 
   const String &file = g_isos[index];
-  Serial.printf("Loading %s ...\n", file.c_str());
+  Term.printf("Loading %s ...\n", file.c_str());
   if (!IsoImage::open(fatPath(file).c_str(), file.c_str())) {
-    Serial.println("  failed to open image");
+    Term.println("  failed to open image");
     return false;
   }
   g_current = index;
   g_prefs.putString("iso", file);
   CdromUsb::mediaInserted();
   uint32_t blocks = IsoImage::blockCount();
-  Serial.printf("  inserted: %lu MB, presented as %s\n", (unsigned long)((uint64_t)blocks * 2048 / (1024 * 1024)),
+  Term.printf("  inserted: %lu MB, presented as %s\n", (unsigned long)((uint64_t)blocks * 2048 / (1024 * 1024)),
                 blocks > CD_MAX_BLOCKS ? "DVD-ROM" : "CD-ROM");
   return true;
 }
@@ -182,19 +183,19 @@ static void selectStartupDisc() {
 // Configures disk mode; USB must be disconnected (or not started yet).
 static bool startDiskMode() {
   if (!g_sdMounted && !mountSd()) {
-    Serial.println("Disk mode: microSD not available");
+    Term.println("Disk mode: microSD not available");
   } else if (!SdDisk::begin(g_pdrv, SD_MMC.numSectors())) {
-    Serial.println("Disk mode: cannot start (out of memory?)");
+    Term.println("Disk mode: cannot start (out of memory?)");
   }
   CdromUsb::setDiskMode(true);
   if (!SdDisk::active()) return false;
-  Serial.printf("USB disk mode: whole microSD (%lu MB) exposed to the PC\n",
+  Term.printf("USB disk mode: whole microSD (%lu MB) exposed to the PC\n",
                 (unsigned long)((uint64_t)SdDisk::sectorCount() * 512 / (1024 * 1024)));
   return true;
 }
 
 static void enterDiskMode() {
-  Serial.println("Switching to USB disk mode");
+  Term.println("Switching to USB disk mode");
   g_prefs.putString("mode", "msc");  // survives reset / power cycle
   ejectDisc();
   tud_disconnect();
@@ -204,7 +205,7 @@ static void enterDiskMode() {
 }
 
 static void leaveDiskMode() {
-  Serial.println("Switching to CD-ROM mode");
+  Term.println("Switching to CD-ROM mode");
   g_prefs.putString("mode", "cdrom");
   tud_disconnect();
   delay(500);
@@ -215,7 +216,7 @@ static void leaveDiskMode() {
   if (mountSd())
     selectStartupDisc();
   else
-    Serial.println("ERROR: microSD mount failed (card must be FAT32)");
+    Term.println("ERROR: microSD mount failed (card must be FAT32)");
   tud_connect();
 }
 
@@ -224,7 +225,7 @@ static void leaveDiskMode() {
 // ---------------------------------------------------------------------------
 static void printList() {
   if (g_isos.empty()) {
-    Serial.printf("No .iso files in %s\n", ISO_DIR);
+    Term.printf("No .iso files in %s\n", ISO_DIR);
     return;
   }
   uint64_t total = 0;
@@ -232,15 +233,15 @@ static void printList() {
     FILINFO fi;
     uint64_t size = f_stat(fatPath(g_isos[i]).c_str(), &fi) == FR_OK ? fi.fsize : 0;
     total += size;
-    Serial.printf("%c %2u  %8.1f MB  %s\n", (int)i == g_current && IsoImage::isOpen() ? '*' : ' ', (unsigned)i, size / 1048576.0,
+    Term.printf("%c %2u  %8.1f MB  %s\n", (int)i == g_current && IsoImage::isOpen() ? '*' : ' ', (unsigned)i, size / 1048576.0,
                   g_isos[i].c_str());
   }
-  Serial.printf("%u image(s), %.1f MB", (unsigned)g_isos.size(), total / 1048576.0);
+  Term.printf("%u image(s), %.1f MB", (unsigned)g_isos.size(), total / 1048576.0);
   FATFS *fs;
   DWORD freeClust;
   if (f_getfree(g_drive, &freeClust, &fs) == FR_OK)
-    Serial.printf(", %.1f MB free on card", (double)freeClust * fs->csize * 512 / 1048576.0);
-  Serial.println(IsoImage::isOpen() ? "  (* = inserted)" : "");
+    Term.printf(", %.1f MB free on card", (double)freeClust * fs->csize * 512 / 1048576.0);
+  Term.println(IsoImage::isOpen() ? "  (* = inserted)" : "");
 }
 
 // Re-reads the ISO folder, keeping g_current on the same file.
@@ -292,7 +293,7 @@ static const char *fatError(FRESULT fr) {
 static void removeIso(const String &arg) {
   int idx = resolveIso(arg);
   if (idx < 0) {
-    Serial.println("No such image (use 'ls')");
+    Term.println("No such image (use 'ls')");
     return;
   }
   String file = g_isos[idx];
@@ -301,27 +302,27 @@ static void removeIso(const String &arg) {
   if (idx == g_current) {
     ejectDisc();
     g_current = -1;
-    Serial.println("Ejected the inserted image");
+    Term.println("Ejected the inserted image");
   }
   FRESULT fr = f_unlink(fatPath(file).c_str());
   if (fr != FR_OK) {
-    Serial.printf("rm %s: %s (%d)\n", file.c_str(), fatError(fr), fr);
+    Term.printf("rm %s: %s (%d)\n", file.c_str(), fatError(fr), fr);
     return;
   }
   if (g_prefs.getString("iso", "") == file) g_prefs.remove("iso");
-  Serial.printf("Deleted %s\n", file.c_str());
+  Term.printf("Deleted %s\n", file.c_str());
   rescanKeepCurrent();
 }
 
 static void renameIso(const String &from, String to) {
   int idx = resolveIso(from);
   if (idx < 0) {
-    Serial.println("No such image (use 'ls')");
+    Term.println("No such image (use 'ls')");
     return;
   }
   to.trim();
   if (!to.length() || to.indexOf('/') >= 0 || to.indexOf('\\') >= 0) {
-    Serial.println("New name must be a plain file name (no folders)");
+    Term.println("New name must be a plain file name (no folders)");
     return;
   }
   String lower = to;
@@ -332,10 +333,10 @@ static void renameIso(const String &from, String to) {
   bool wasInserted = idx == g_current && IsoImage::isOpen();
   FRESULT fr = f_rename(fatPath(file).c_str(), fatPath(to).c_str());
   if (fr != FR_OK) {
-    Serial.printf("mv %s: %s (%d)\n", file.c_str(), fatError(fr), fr);
+    Term.printf("mv %s: %s (%d)\n", file.c_str(), fatError(fr), fr);
     return;
   }
-  Serial.printf("Renamed %s -> %s\n", file.c_str(), to.c_str());
+  Term.printf("Renamed %s -> %s\n", file.c_str(), to.c_str());
   if (g_prefs.getString("iso", "") == file) g_prefs.putString("iso", to);
   String cur = g_current >= 0 ? (idx == g_current ? to : g_isos[g_current]) : "";
   scanIsos();
@@ -347,27 +348,27 @@ static void renameIso(const String &from, String to) {
 static void printHelp(String topic) {
   topic.toLowerCase();
   if (topic == "mv" || topic == "rename") {
-    Serial.println("mv <n|name> <new name>   (alias: rename)\n"
+    Term.println("mv <n|name> <new name>   (alias: rename)\n"
                    "  Renames an image. \".iso\" is added if missing. Use quotes for\n"
                    "  names with spaces:  mv 2 \"Ubuntu 24.04.iso\"\n"
                    "  An inserted image is re-inserted under its new name.");
   } else if (topic == "rm" || topic == "remove") {
-    Serial.println("rm <n|name>   (alias: remove)\n"
+    Term.println("rm <n|name>   (alias: remove)\n"
                    "  Deletes an image from the card (cannot be undone). The inserted\n"
                    "  image is ejected first.  Example: rm 3   or   rm old.iso");
   } else if (topic == "set-mode" || topic == "msc" || topic == "mode") {
-    Serial.println("set-mode msc | set-mode cdrom\n"
+    Term.println("set-mode msc | set-mode cdrom\n"
                    "  msc  : the PC sees the whole microSD as a USB disk - copy ISOs\n"
                    "         onto it (FAT32, into " ISO_DIR ").\n"
                    "  cdrom: back to the virtual CD-ROM. 'Eject' / 'Safely Remove' the\n"
                    "         disk on the PC first so all writes are finished.\n"
                    "  The mode is saved and restored after a reset / power cycle.");
   } else if (topic == "format") {
-    Serial.println("format YES\n"
+    Term.println("format YES\n"
                    "  Wipes ALL partitions on the microSD and creates one FAT32\n"
                    "  partition labelled " SD_FORMAT_LABEL ". All data is lost.");
   } else {
-    Serial.println(
+    Term.println(
         "ESP32-P4 virtual CD-ROM - copy .iso files to the microSD, then pick one\n"
         "to present to the PC as a CD/DVD drive.\n"
         "\n"
@@ -396,23 +397,23 @@ static void printHelp(String topic) {
 }
 
 static void printInfo() {
-  Serial.printf("USB      : %s\n", USB ? "connected" : "not connected");
+  Term.printf("USB      : %s\n", USB ? "connected" : "not connected");
   if (CdromUsb::diskMode()) {
-    Serial.println("Mode     : USB disk (msc)");
-    Serial.printf("Card     : %lu MB%s\n", (unsigned long)((uint64_t)SdDisk::sectorCount() * 512 / (1024 * 1024)),
+    Term.println("Mode     : USB disk (msc)");
+    Term.printf("Card     : %lu MB%s\n", (unsigned long)((uint64_t)SdDisk::sectorCount() * 512 / (1024 * 1024)),
                   SdDisk::active() ? "" : " (not available)");
-    Serial.printf("Traffic  : %llu MB read, %llu MB written\n", SdDisk::bytesRead() / (1024 * 1024), SdDisk::bytesWritten() / (1024 * 1024));
+    Term.printf("Traffic  : %llu MB read, %llu MB written\n", SdDisk::bytesRead() / (1024 * 1024), SdDisk::bytesWritten() / (1024 * 1024));
     return;
   }
-  Serial.println("Mode     : CD-ROM");
+  Term.println("Mode     : CD-ROM");
   if (IsoImage::isOpen()) {
-    Serial.printf("Disc     : %s (%lu blocks)\n", IsoImage::name(), (unsigned long)IsoImage::blockCount());
+    Term.printf("Disc     : %s (%lu blocks)\n", IsoImage::name(), (unsigned long)IsoImage::blockCount());
   } else {
-    Serial.println("Disc     : none");
+    Term.println("Disc     : none");
   }
-  Serial.printf("Tray lock: %s\n", CdromUsb::locked() ? "locked by host" : "unlocked");
-  Serial.printf("Served   : %llu MB, %lu cache misses\n", IsoImage::bytesServed() / (1024 * 1024), (unsigned long)IsoImage::cacheMisses());
-  Serial.printf("PSRAM    : %u KB free\n", (unsigned)(ESP.getFreePsram() / 1024));
+  Term.printf("Tray lock: %s\n", CdromUsb::locked() ? "locked by host" : "unlocked");
+  Term.printf("Served   : %llu MB, %lu cache misses\n", IsoImage::bytesServed() / (1024 * 1024), (unsigned long)IsoImage::cacheMisses());
+  Term.printf("PSRAM    : %u KB free\n", (unsigned)(ESP.getFreePsram() / 1024));
 }
 
 static void handleCommand(String line) {
@@ -428,13 +429,13 @@ static void handleCommand(String line) {
                  || cmd == "rescan" || cmd == "rm" || cmd == "mv"
                  || cmd == "remove" || cmd == "rename";
   if (discCmd && CdromUsb::diskMode()) {
-    Serial.println("Not available in USB disk mode (use 'set-mode cdrom' first)");
+    Term.println("Not available in USB disk mode (use 'set-mode cdrom' first)");
     return;
   }
   bool needCard = cmd == "ls" || cmd == "list" || cmd == "mount" || cmd == "insert" || cmd == "rescan" || cmd == "rm" || cmd == "mv"
                  || cmd == "remove" || cmd == "rename";
   if (needCard && !g_sdMounted) {
-    Serial.println("microSD not mounted (card inserted? try 'format YES')");
+    Term.println("microSD not mounted (card inserted? try 'format YES')");
     return;
   }
 
@@ -446,38 +447,38 @@ static void handleCommand(String line) {
   } else if (cmd == "rm" || cmd == "remove") {
     std::vector<String> a = splitArgs(arg);
     if (a.size() != 1)
-      Serial.println("Usage: rm <n|name>   (see 'help rm')");
+      Term.println("Usage: rm <n|name>   (see 'help rm')");
     else
       removeIso(a[0]);
   } else if (cmd == "mv" || cmd == "rename") {
     std::vector<String> a = splitArgs(arg);
     if (a.size() != 2)
-      Serial.println("Usage: mv <n|name> <new name>   (quote names with spaces, see 'help mv')");
+      Term.println("Usage: mv <n|name> <new name>   (quote names with spaces, see 'help mv')");
     else
       renameIso(a[0], a[1]);
   } else if (cmd == "mount" || cmd == "insert") {
     if (arg.startsWith("\"") && arg.endsWith("\"") && arg.length() >= 2) arg = arg.substring(1, arg.length() - 1);
     int idx = resolveIso(arg);
     if (idx < 0)
-      Serial.println("No such image (use 'ls')");
+      Term.println("No such image (use 'ls')");
     else
       insertDisc(idx);
   } else if (cmd == "next") {
     if (!g_isos.empty()) insertDisc((g_current + 1) % g_isos.size());
   } else if (cmd == "eject") {
     ejectDisc();
-    Serial.println("Disc ejected");
+    Term.println("Disc ejected");
   } else if (cmd == "load") {
     if (g_current >= 0)
       insertDisc(g_current);
     else
-      Serial.println("No previous image");
+      Term.println("No previous image");
   } else if (cmd == "rescan") {
     rescanKeepCurrent();
     printList();
   } else if (cmd == "format") {
     if (arg != "YES") {
-      Serial.println("This ERASES the whole microSD (all partitions) and formats it FAT32.\nType: format YES");
+      Term.println("This ERASES the whole microSD (all partitions) and formats it FAT32.\nType: format YES");
       return;
     }
     ejectDisc();
@@ -485,34 +486,34 @@ static void handleCommand(String line) {
     g_current = -1;
     unmountSd();
     SdFormat::Result r = SdFormat::run(true);
-    Serial.printf("SD: %s\n", SdFormat::describe(r));
+    Term.printf("SD: %s\n", SdFormat::describe(r));
     if (mountSdOnce()) {
       scanIsos();
-      Serial.println("Card ready - use 'set-mode msc' to copy ISOs");
+      Term.println("Card ready - use 'set-mode msc' to copy ISOs");
     } else {
-      Serial.println("ERROR: card mount failed after format");
+      Term.println("ERROR: card mount failed after format");
     }
   } else if (cmd == "set-mode") {
     arg.toLowerCase();
     if (arg == "msc") {
       if (CdromUsb::diskMode())
-        Serial.println("Already in msc mode");
+        Term.println("Already in msc mode");
       else
         enterDiskMode();
     } else if (arg == "cdrom") {
       if (!CdromUsb::diskMode())
-        Serial.println("Already in cdrom mode");
+        Term.println("Already in cdrom mode");
       else
         leaveDiskMode();
     } else {
-      Serial.println("Usage: set-mode msc|cdrom");
+      Term.println("Usage: set-mode msc|cdrom");
     }
   } else if (cmd == "get-mode") {
-    Serial.println(CdromUsb::diskMode() ? "msc" : "cdrom");
+    Term.println(CdromUsb::diskMode() ? "msc" : "cdrom");
   } else if (cmd == "info" || cmd == "status") {
     printInfo();
   } else {
-    Serial.println("Unknown command, type 'help'");
+    Term.println("Unknown command, type 'help'");
   }
 }
 
@@ -549,23 +550,23 @@ static void startConsole() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== ESP32-P4 USB CD-ROM emulator ===");
+  Term.println("\n=== ESP32-P4 USB CD-ROM emulator ===");
 
 #if BUTTON_PIN >= 0
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 #endif
   g_prefs.begin("cdrom", false);
 
-  if (!IsoImage::begin()) Serial.println("ERROR: cannot allocate read cache");
+  if (!IsoImage::begin()) Term.println("ERROR: cannot allocate read cache");
 
   bool sdOk = mountSd();
-  if (!sdOk) Serial.println("ERROR: microSD mount failed (card inserted? FAT32 formatted?)");
+  if (!sdOk) Term.println("ERROR: microSD mount failed (card inserted? FAT32 formatted?)");
 
   // USB comes up even without a card so the host sees an empty drive.
   CdromUsb::begin();
   // Start in the mode saved by the last 'set-mode' (default: cdrom).
   if (g_prefs.getString("mode", "cdrom") == "msc") {
-    Serial.println("Saved mode: msc -> USB disk mode ('set-mode cdrom' to leave)");
+    Term.println("Saved mode: msc -> USB disk mode ('set-mode cdrom' to leave)");
     startDiskMode();
   } else if (sdOk) {
     selectStartupDisc();
@@ -573,7 +574,7 @@ void setup() {
   USB.manufacturerName(USB_VENDOR_STR);
   USB.productName(USB_PRODUCT_STR);
   USB.begin();
-  Serial.println("Type 'help' for commands.");
+  Term.println("Type 'help' for commands.");
   startConsole();
 }
 
@@ -586,7 +587,7 @@ void loop() {
   }
 
   if (CdromUsb::diskMode()) {
-    if (CdromUsb::takeDiskEjected()) Serial.println("PC ejected the disk - all data written, safe to 'set-mode cdrom'");
+    if (CdromUsb::takeDiskEjected()) Term.println("PC ejected the disk - all data written, safe to 'set-mode cdrom'");
     delay(5);
     return;
   }
@@ -594,7 +595,7 @@ void loop() {
   // Host pressed "Eject" / closed the tray.
   if (CdromUsb::takeHostEject()) {
     IsoImage::close();
-    Serial.println("Host ejected the disc ('load' or BOOT button to re-insert)");
+    Term.println("Host ejected the disc ('load' or BOOT button to re-insert)");
   }
   if (CdromUsb::takeHostLoad() && g_current >= 0) insertDisc(g_current);
 
