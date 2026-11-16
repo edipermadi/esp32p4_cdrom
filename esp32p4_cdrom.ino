@@ -184,12 +184,32 @@ static int findIso(const String &name) {
 // ---------------------------------------------------------------------------
 // Mode switching (CD-ROM <-> USB disk)
 // ---------------------------------------------------------------------------
+// Inserts the image remembered in NVS. If it is gone (or cannot be opened)
+// the first image that opens is used instead and becomes the remembered one.
 static void selectStartupDisc() {
   scanIsos();
+  if (g_isos.empty()) {
+    printList();
+    return;
+  }
+  String saved = g_prefs.getString("iso", "");
+  int idx = findIso(saved);
+  if (idx >= 0)
+    Term.printf("Remembered image: %s\n", saved.c_str());
+  else if (saved.length())
+    Term.printf("Remembered image %s not found, using the first image\n", saved.c_str());
+  int n = g_isos.size();
+  int start = idx >= 0 ? idx : 0;
+  bool ok = false;
+  // Try the remembered image first, then every image from the top of the list.
+  for (int k = -1; k < n && !ok; k++) {
+    int i = k < 0 ? start : k;
+    if (k >= 0 && i == start) continue;
+    if (k >= 0) Term.printf("Trying %s instead\n", g_isos[i].c_str());
+    ok = insertDisc(i);
+  }
+  if (!ok) Term.println("No image could be opened - drive stays empty");
   printList();
-  int idx = findIso(g_prefs.getString("iso", ""));
-  if (idx < 0 && !g_isos.empty()) idx = 0;
-  if (idx >= 0) insertDisc(idx);
 }
 
 // Configures disk mode; USB must be disconnected (or not started yet).
