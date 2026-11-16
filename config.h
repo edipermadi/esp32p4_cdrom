@@ -39,10 +39,6 @@
 // instead of a CD-ROM (~800 MB, slightly above a 90-minute CD).
 #define CD_MAX_BLOCKS 405000UL
 
-// ---- Front-panel button ------------------------------------------------------
-// The BOOT button cycles to the next ISO. Set to -1 to disable.
-#define BUTTON_PIN 35
-
 // ---- USB disk mode (copy files from the PC to the microSD) -------------------
 // Serial command "set-mode msc" makes the device appear as a read/write USB
 // disk of the whole microSD card instead of a CD-ROM; "set-mode cdrom" returns.

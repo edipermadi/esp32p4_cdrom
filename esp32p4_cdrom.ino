@@ -27,6 +27,7 @@
 #include <Preferences.h>
 #include <vector>
 #include <algorithm>
+#include <mutex>
 #include "ff.h"
 #include "tusb.h"
 #include "driver/uart.h"
@@ -112,8 +113,18 @@ static String fatPath(const String &file) {
   return p + file;
 }
 
+// Copy of g_isos for TAB completion, which runs on the console task.
+static std::vector<String> g_isoNames;
+static std::mutex g_isoNamesMux;
+
+static void publishIsoNames() {
+  std::lock_guard<std::mutex> lock(g_isoNamesMux);
+  g_isoNames = g_isos;
+}
+
 static void scanIsos() {
   g_isos.clear();
+  publishIsoNames();
   String dirPath = String(g_drive) + ISO_DIR;
   FF_DIR dir;
   FILINFO fi;
@@ -130,6 +141,7 @@ static void scanIsos() {
   }
   f_closedir(&dir);
   std::sort(g_isos.begin(), g_isos.end(), [](const String &a, const String &b) { return strcasecmp(a.c_str(), b.c_str()) < 0; });
+  publishIsoNames();
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +387,8 @@ static void printHelp(String topic) {
         "Images (cdrom mode)\n"
         "  ls                 list ISO images with size and index (alias: list)\n"
         "  mount <n|name>     insert an image (by index from 'ls' or file name)\n"
-        "  next               insert the next image (also: BOOT button)\n"
+        "  next               insert the next image (wraps around)\n"
+        "  prev               insert the previous image (wraps around)\n"
         "  eject              remove the disc\n"
         "  load               re-insert the last image\n"
         "  rm <n|name>        delete an image (alias: remove)\n"
@@ -425,7 +438,7 @@ static void handleCommand(String line) {
   arg.trim();
   cmd.toLowerCase();
 
-  bool discCmd = cmd == "format" || cmd == "ls" || cmd == "list" || cmd == "mount" || cmd == "insert" || cmd == "next" || cmd == "eject" || cmd == "load"
+  bool discCmd = cmd == "format" || cmd == "ls" || cmd == "list" || cmd == "mount" || cmd == "insert" || cmd == "next" || cmd == "prev" || cmd == "eject" || cmd == "load"
                  || cmd == "rescan" || cmd == "rm" || cmd == "mv"
                  || cmd == "remove" || cmd == "rename";
   if (discCmd && CdromUsb::diskMode()) {
@@ -463,8 +476,14 @@ static void handleCommand(String line) {
       Term.println("No such image (use 'ls')");
     else
       insertDisc(idx);
-  } else if (cmd == "next") {
-    if (!g_isos.empty()) insertDisc((g_current + 1) % g_isos.size());
+  } else if (cmd == "next" || cmd == "prev") {
+    int n = g_isos.size();
+    if (!n)
+      Term.println("No .iso files (use 'ls')");
+    else if (cmd == "next")
+      insertDisc(g_current < 0 ? 0 : (g_current + 1) % n);
+    else
+      insertDisc(g_current < 0 ? n - 1 : (g_current - 1 + n) % n);
   } else if (cmd == "eject") {
     ejectDisc();
     Term.println("Disc ejected");
@@ -483,6 +502,7 @@ static void handleCommand(String line) {
     }
     ejectDisc();
     g_isos.clear();
+    publishIsoNames();
     g_current = -1;
     unmountSd();
     SdFormat::Result r = SdFormat::run(true);
@@ -517,6 +537,65 @@ static void handleCommand(String line) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TAB completion (runs on the console task)
+// ---------------------------------------------------------------------------
+static const char *const kCommands[] = {"ls", "list", "mount", "insert", "next", "prev", "eject", "load", "rm", "remove", "mv", "rename",
+                                        "rescan", "info", "format", "set-mode", "get-mode", "help"};
+static const char *const kHelpTopics[] = {"mv", "rename", "rm", "remove", "set-mode", "format"};
+static const char *const kModes[] = {"msc", "cdrom"};
+
+static bool startsWithNoCase(const String &s, const String &prefix) {
+  return s.length() >= prefix.length() && strncasecmp(s.c_str(), prefix.c_str(), prefix.length()) == 0;
+}
+
+// Offers "<head><word><tail>" for every word starting with `prefix`.
+template <size_t N>
+static void completeWords(linenoiseCompletions *lc, const String &head, const String &prefix, const char *const (&words)[N],
+                          const char *tail = "") {
+  for (const char *w : words)
+    if (startsWithNoCase(w, prefix)) linenoiseAddCompletion(lc, (head + w + tail).c_str());
+}
+
+static void completionCallback(const char *buf, linenoiseCompletions *lc) {
+  String line = buf;
+  int sp = line.indexOf(' ');
+  if (sp < 0) {  // first word: command name
+    completeWords(lc, "", line, kCommands, " ");
+    return;
+  }
+  String cmd = line.substring(0, sp);
+  cmd.toLowerCase();
+  String head = line.substring(0, sp + 1);
+  String arg = line.substring(sp + 1);
+  while (arg.startsWith(" ")) {  // keep extra spaces typed after the command
+    head += ' ';
+    arg.remove(0, 1);
+  }
+
+  if (cmd == "help" || cmd == "?") {
+    if (arg.indexOf(' ') < 0) completeWords(lc, head, arg, kHelpTopics);
+  } else if (cmd == "set-mode") {
+    if (arg.indexOf(' ') < 0) completeWords(lc, head, arg, kModes);
+  } else if (cmd == "mount" || cmd == "insert" || cmd == "rm" || cmd == "remove" || cmd == "mv" || cmd == "rename") {
+    // Only the first argument (an image name). A leading quote allows spaces.
+    bool quoted = arg.startsWith("\"");
+    String prefix = quoted ? arg.substring(1) : arg;
+    if (prefix.indexOf(quoted ? '"' : ' ') >= 0) return;  // already past the first argument
+    const char *tail = (cmd == "mv" || cmd == "rename") ? " " : "";
+    std::lock_guard<std::mutex> lock(g_isoNamesMux);
+    for (const String &name : g_isoNames) {
+      if (!startsWithNoCase(name, prefix)) continue;
+      String c = head;
+      if (quoted || name.indexOf(' ') >= 0)
+        c += "\"" + name + "\"";
+      else
+        c += name;
+      linenoiseAddCompletion(lc, (c + tail).c_str());
+    }
+  }
+}
+
 // Blocking linenoise reader on its own task. stdin/stdout are routed through
 // the UART driver that Serial installed, so both share one RX/TX path.
 static void consoleTask(void *) {
@@ -540,6 +619,7 @@ static void startConsole() {
   uart_vfs_dev_use_driver(UART_NUM_0);
   linenoiseSetMultiLine(1);
   linenoiseHistorySetMaxLen(20);
+  linenoiseSetCompletionCallback(completionCallback);
   linenoiseAllowEmpty(false);
   g_cmdQueue = xQueueCreate(1, sizeof(char *));
   g_cmdDone = xSemaphoreCreateBinary();
@@ -552,9 +632,6 @@ void setup() {
   delay(200);
   Term.println("\n=== ESP32-P4 USB CD-ROM emulator ===");
 
-#if BUTTON_PIN >= 0
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-#endif
   g_prefs.begin("cdrom", false);
 
   if (!IsoImage::begin()) Term.println("ERROR: cannot allocate read cache");
@@ -595,25 +672,9 @@ void loop() {
   // Host pressed "Eject" / closed the tray.
   if (CdromUsb::takeHostEject()) {
     IsoImage::close();
-    Term.println("Host ejected the disc ('load' or BOOT button to re-insert)");
+    Term.println("Host ejected the disc ('load' to re-insert)");
   }
   if (CdromUsb::takeHostLoad() && g_current >= 0) insertDisc(g_current);
 
-#if BUTTON_PIN >= 0
-  // BOOT button: cycle to the next image (re-insert if the tray is empty).
-  static bool lastBtn = true;
-  static uint32_t lastChange = 0;
-  bool btn = digitalRead(BUTTON_PIN);
-  if (btn != lastBtn && millis() - lastChange > 50) {
-    lastChange = millis();
-    lastBtn = btn;
-    if (!btn && !g_isos.empty()) {
-      if (!IsoImage::isOpen() && g_current >= 0)
-        insertDisc(g_current);
-      else
-        insertDisc((g_current + 1) % g_isos.size());
-    }
-  }
-#endif
   delay(5);
 }

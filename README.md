@@ -22,11 +22,11 @@ USB cable.
   was set last.
 - **Last image remembered:** the ISO that was inserted is re-inserted after a
   reset or power cycle.
-- **Serial console** with line editing (backspace, arrow keys, history) for
-  listing, inserting, deleting and renaming images.
+- **Serial console** with line editing (backspace, arrow keys, history) and
+  TAB completion of commands and image names, for listing, inserting,
+  deleting and renaming images.
 - **Disc change and eject:** the host sees media-change events. The PC's
   "Eject" command and the host tray lock (prevent removal) are honoured.
-- **BOOT button** cycles to the next image.
 - **Auto-format:** a blank or non-FAT card can be partitioned and formatted
   FAT32 automatically or with `format YES`.
 
@@ -41,7 +41,6 @@ USB cable.
 | USB (console) | USB-C UART port, 115200 baud                                      |
 | Storage       | microSD on SDMMC slot 0, 4-bit, 40 MHz (20 MHz fallback)          |
 | SD pins       | CLK 43, CMD 44, D0 39, D1 40, D2 41, D3 42, I/O power from LDO ch. 4 |
-| Button        | BOOT (GPIO35): next image                                         |
 
 The ESP32-C6 co-processor on the board is not used. Pins and other settings
 are in [`config.h`](config.h).
@@ -115,7 +114,8 @@ cdrom> mount 1
 |-------------------------------|------------------------------------------------------|
 | `ls` / `list`                 | List ISO images with index and size, and free space  |
 | `mount <n\|name>`             | Insert an image by index or file name                |
-| `next`                        | Insert the next image (same as the BOOT button)      |
+| `next`                        | Insert the next image (wraps around)                 |
+| `prev`                        | Insert the previous image (wraps around)             |
 | `eject`                       | Remove the disc                                      |
 | `load`                        | Re-insert the last image                             |
 | `rm <n\|name>` / `remove`     | Delete an image (the inserted one is ejected first)  |
@@ -128,7 +128,9 @@ cdrom> mount 1
 | `format YES`                  | Wipe all partitions and format the card FAT32        |
 | `help [command]`              | Command overview, or details for one command         |
 
-Put file names that contain spaces in quotes:
+Press TAB to complete command names, `set-mode` / `help` arguments and image
+names (after `mount`, `rm`, `mv`, ...). With several matches, keep pressing
+TAB to cycle through them. Put file names that contain spaces in quotes:
 `mv 2 "Ubuntu 24.04.iso"`.
 
 Image commands (`ls`, `mount`, `rm`, `mv`, ...) are only available in cdrom
