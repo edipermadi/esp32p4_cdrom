@@ -86,6 +86,20 @@ Arduino IDE or `arduino-cli` with the **esp32 core 3.3.x** (tested with 3.3.12).
 | Flash Size        | 16MB                                                 |
 | PSRAM             | Enabled                                              |
 
+### Command line
+
+The `Makefile` wraps `arduino-cli` with the settings above:
+
+```
+make                 # compile into ./build
+make upload          # compile and flash over the UART USB-C port
+make monitor         # serial console at 115200
+make flash           # upload, then monitor
+make info            # show FQBN and port
+```
+
+Override as needed: `make upload PORT=/dev/ttyUSB1 CHIP=postv3`.
+
 ## Usage
 
 1. Format the microSD card FAT32 (or let the board do it, see `format YES`).
